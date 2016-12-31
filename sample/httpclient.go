@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -23,10 +22,6 @@ func main() {
 	buf := make([]byte, 20048+8)
 	rand.Read(buf)
 	c := make(chan bool, 10)
-	cfg := &tls.Config{
-		InsecureSkipVerify: true,
-	}
-
 
 	pub1,_ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
 	priv1,_ := base64.StdEncoding.DecodeString("vFilCT/FcyeShgbpTUrpru9n5yzZey8yfhsAx6DeL80=")
@@ -39,9 +34,7 @@ func main() {
 	}
 
 	transport := &http.Transport{
-		TLSClientConfig: cfg,
-		MaxIdleConnsPerHost:20,
-		//DisableKeepAlives:true,
+		MaxIdleConnsPerHost:10,
 		DialTLS:func(network, addr string) (net.Conn, error) {
 			return noisetls.Dial(network, addr, clientKeys, serverPub)
 		},
@@ -49,10 +42,6 @@ func main() {
 	for j := 0; j < 10; j++ {
 		go func() {
 
-			/*err := http2.ConfigureTransport(transport)
-			if err != nil {
-				panic(err)
-			}*/
 			cli := &http.Client{
 				Transport: transport,
 			}

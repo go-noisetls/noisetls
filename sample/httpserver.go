@@ -31,7 +31,7 @@ func main() {
 		WriteTimeout: 1 * time.Minute,
 	}
 
-	buf := make([]byte, 173) //send 513 bytes
+	buf := make([]byte, 2048*2+17) //send 4113 bytes
 	rand.Read(buf)
 	server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(ioutil.Discard, r.Body)
