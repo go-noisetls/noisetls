@@ -297,12 +297,10 @@ func (c *Conn) readPacket(packetType uint16) error {
 	case PacketTypeData:
 		if typ != packetType {
 			return c.in.setErrorLocked(errors.New("unexpected packet type"))
-			break
 		}
 		c.input = b
 		b = nil
 	case PacketTypeHandshake:
-		// TODO(rsc): Should at least pick off connection close.
 		if typ != packetType {
 			return c.in.setErrorLocked(errors.New("unexpected packet type"))
 		}
