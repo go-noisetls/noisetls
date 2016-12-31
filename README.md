@@ -12,4 +12,4 @@ Uses NoiseIK for now. No re-handshaking.
 ## Type uint16
 ## Size uint16
 ## Reserved uint16
-## Payload <Size> bytes
+## Payload [Size] bytes
