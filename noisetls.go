@@ -1,10 +1,9 @@
 package noisetls
 
 import (
-	"net"
 	"github.com/flynn/noise"
+	"net"
 )
-
 
 // Server returns a new TLS server side connection
 // using conn as the underlying transport.
@@ -12,12 +11,11 @@ import (
 // at least one certificate or else set GetCertificate.
 func Server(conn net.Conn, key noise.DHKey) *Conn {
 	return &Conn{
-		conn: conn,
-		myKeys:key,
-		cs: noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashBLAKE2s),
+		conn:   conn,
+		myKeys: key,
+		cs:     noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashBLAKE2s),
 	}
 }
-
 
 // Client returns a new TLS client side connection
 // using conn as the underlying transport.
@@ -25,11 +23,11 @@ func Server(conn net.Conn, key noise.DHKey) *Conn {
 // InsecureSkipVerify in the config.
 func Client(conn net.Conn, key noise.DHKey, serverKey []byte) *Conn {
 	return &Conn{
-		conn: conn,
-		myKeys:key,
-		PeerKey:serverKey,
+		conn:     conn,
+		myKeys:   key,
+		PeerKey:  serverKey,
 		isClient: true,
-		cs: noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashBLAKE2s),
+		cs:       noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashBLAKE2s),
 	}
 }
 
@@ -66,7 +64,7 @@ func Listen(network, laddr string, key noise.DHKey) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewListener(l, key ), nil
+	return NewListener(l, key), nil
 }
 
 type timeoutError struct{}
@@ -83,7 +81,6 @@ func (timeoutError) Temporary() bool { return true }
 // DialWithDialer interprets a nil configuration as equivalent to the zero
 // configuration; see the documentation of Config for the defaults.
 func DialWithDialer(dialer *net.Dialer, network, addr string, key noise.DHKey, serverKey []byte) (*Conn, error) {
-
 
 	rawConn, err := dialer.Dial(network, addr)
 	if err != nil {

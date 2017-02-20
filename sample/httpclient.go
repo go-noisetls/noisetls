@@ -2,40 +2,40 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"time"
 
-	"crypto/rand"
-
-	"gopkg.in/noisetls.v0"
-	"net"
-	"encoding/base64"
 	"github.com/flynn/noise"
+	"gopkg.in/noisetls.v0"
 )
 
 func main() {
+
 	t := time.Now()
 	n := 10000
 	buf := make([]byte, 20048+8)
 	rand.Read(buf)
 	c := make(chan bool, 10)
 
-	pub1,_ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
-	priv1,_ := base64.StdEncoding.DecodeString("vFilCT/FcyeShgbpTUrpru9n5yzZey8yfhsAx6DeL80=")
+	pub1, _ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
+	priv1, _ := base64.StdEncoding.DecodeString("vFilCT/FcyeShgbpTUrpru9n5yzZey8yfhsAx6DeL80=")
 
-	serverPub,_ :=  base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
+	serverPub, _ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
 
 	clientKeys := noise.DHKey{
-		Public:pub1,
-		Private:priv1,
+		Public:  pub1,
+		Private: priv1,
 	}
 
 	transport := &http.Transport{
-		MaxIdleConnsPerHost:10,
-		DialTLS:func(network, addr string) (net.Conn, error) {
+		MaxIdleConnsPerHost: 10,
+		DialTLS: func(network, addr string) (net.Conn, error) {
 			return noisetls.Dial(network, addr, clientKeys, serverPub)
 		},
 	}

@@ -1,17 +1,16 @@
 package noisetls
 
 import (
-	"net"
-	"time"
-	"sync"
-	"github.com/flynn/noise"
-	"crypto/rand"
-	"github.com/pkg/errors"
-	"encoding/binary"
-	"io"
 	"bytes"
+	"crypto/rand"
+	"encoding/binary"
+	"github.com/flynn/noise"
+	"github.com/pkg/errors"
+	"io"
+	"net"
+	"sync"
+	"time"
 )
-
 
 type Conn struct {
 	conn              net.Conn
@@ -24,37 +23,36 @@ type Conn struct {
 	handshakeComplete bool
 	isClient          bool
 	handshakeErr      error
-	input *block
-	rawInput *block
-	hand      bytes.Buffer // handshake data waiting to be read
+	input             *block
+	rawInput          *block
+	hand              bytes.Buffer // handshake data waiting to be read
 }
 
 type halfConn struct {
 	sync.Mutex
-	cs *noise.CipherState
-	err error
-	bfree          *block   // list of free blocks
+	cs    *noise.CipherState
+	err   error
+	bfree *block // list of free blocks
 
 }
 
 func (h *halfConn) Encrypt(data []byte) []byte {
-	if h.cs != nil{
-		return h.cs.Encrypt(nil,nil,data)
+	if h.cs != nil {
+		return h.cs.Encrypt(nil, nil, data)
 	}
 	return data
 }
 
-
 // decrypt checks and strips the mac and decrypts the data in b. Returns a
 // success boolean, the number of bytes to skip from the start of the record in
 // order to get the application payload, and an optional alert value.
-func (h *halfConn) decrypt(b *block) (error) {
+func (h *halfConn) decrypt(b *block) error {
 	// pull out payload
 	payload := b.data[PacketHeaderLen:]
 
-	if h.cs != nil{
-		payload, err :=  h.cs.Decrypt(payload[:0],nil,payload)
-		if err != nil{
+	if h.cs != nil {
+		payload, err := h.cs.Decrypt(payload[:0], nil, payload)
+		if err != nil {
 			return err
 		}
 		b.resize(PacketHeaderLen + len(payload))
@@ -138,9 +136,7 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
-
 func (c *Conn) Write(b []byte) (int, error) {
-
 
 	if err := c.Handshake(); err != nil {
 		return 0, err
@@ -156,10 +152,8 @@ func (c *Conn) Write(b []byte) (int, error) {
 		return 0, errors.New("internal error")
 	}
 
-
 	return c.writePacketLocked(PacketTypeData, b)
 }
-
 
 func (c *Conn) writePacket(typ uint16, data []byte) (int, error) {
 	c.out.Lock()
@@ -175,22 +169,22 @@ func (c *Conn) writePacketLocked(typ uint16, data []byte) (int, error) {
 		m := len(data)
 
 		maxPayloadSize := c.maxPayloadSizeForWrite(typ)
-		if m > maxPayloadSize{
+		if m > maxPayloadSize {
 			m = maxPayloadSize
 		}
 
 		payload := c.out.Encrypt(data[:m])
 		packet := &Packet{
-			Version:1,
-			Type:typ,
-			Payload:payload,
+			Version: 1,
+			Type:    typ,
+			Payload: payload,
 		}
 		serialized, err := packet.Marshal()
-		if err != nil{
+		if err != nil {
 			return 0, err
 		}
 
-		if _, err := c.conn.Write(serialized); err != nil{
+		if _, err := c.conn.Write(serialized); err != nil {
 			return n, err
 		}
 		n += m
@@ -207,7 +201,7 @@ func (c *Conn) maxPayloadSizeForWrite(typ uint16) int {
 // Read reads data from the connection.
 // Read can be made to time out and return a Error with Timeout() == true
 // after a fixed time limit; see SetDeadline and SetReadDeadline.
-func(c *Conn) Read(b []byte) (n int, err error) {
+func (c *Conn) Read(b []byte) (n int, err error) {
 	if err = c.Handshake(); err != nil {
 		return
 	}
@@ -237,7 +231,6 @@ func(c *Conn) Read(b []byte) (n int, err error) {
 	return n, err
 }
 
-
 // readRecord reads the next TLS record from the connection
 // and updates the record layer state.
 // c.in.Mutex <= L; c.input == nil.
@@ -266,12 +259,11 @@ func (c *Conn) readPacket(packetType uint16) error {
 	}
 
 	ver := binary.BigEndian.Uint16(b.data)
-	if ver != 1{
+	if ver != 1 {
 
 	}
 	typ := binary.BigEndian.Uint16(b.data[2:])
 	n := int(binary.BigEndian.Uint16(b.data[4:]))
-
 
 	if err := b.readFromUntil(c.conn, PacketHeaderLen+n); err != nil {
 		if err == io.EOF {
@@ -315,7 +307,7 @@ func (c *Conn) readPacket(packetType uint16) error {
 
 // Close closes the connection.
 // Any blocked Read or Write operations will be unblocked and return errors.
-func(c *Conn) Close() error{
+func (c *Conn) Close() error {
 	return c.conn.Close()
 }
 
@@ -354,9 +346,7 @@ func (c *Conn) Handshake() error {
 		}
 	}
 
-
-
-	if c.isClient{
+	if c.isClient {
 		c.handshakeErr = c.RunClientHandshake()
 	} else {
 		c.handshakeErr = c.RunServerHandshake()
@@ -366,17 +356,16 @@ func (c *Conn) Handshake() error {
 
 func (c *Conn) RunClientHandshake() error {
 
-
 	c.InitHandshakeState(true, c.PeerKey)
 	buf := make([]byte, 1024*2)
 	msg, _, _ := c.hs.WriteMessage(buf[:0], nil)
 	_, err := c.writePacket(PacketTypeHandshake, msg)
-	if err != nil{
+	if err != nil {
 		return err
 	}
 
 	if err := c.in.err; err != nil {
-		return  err
+		return err
 	}
 	if err := c.readPacket(PacketTypeHandshake); err != nil {
 		return err
@@ -384,7 +373,7 @@ func (c *Conn) RunClientHandshake() error {
 
 	msg = c.hand.Next(c.hand.Len())
 	_, csOut, csIn, err := c.hs.ReadMessage(buf[:0], msg)
-	if err != nil{
+	if err != nil {
 		return err
 	}
 	c.out.cs = csOut
@@ -405,13 +394,13 @@ func (c *Conn) RunServerHandshake() error {
 	msg := c.hand.Next(c.hand.Len())
 	_, _, _, err := c.hs.ReadMessage(buf[:0], msg)
 
-	if err != nil{
+	if err != nil {
 		return err
 	}
 	msg, csIn, csOut := c.hs.WriteMessage(buf[:0], nil)
 	_, err = c.writePacket(PacketTypeHandshake, msg)
 
-	if err != nil{
+	if err != nil {
 		return err
 	}
 	c.out.cs = csOut
