@@ -13,7 +13,6 @@ func Server(conn net.Conn, key noise.DHKey) *Conn {
 	return &Conn{
 		conn:   conn,
 		myKeys: key,
-		cs:     noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashBLAKE2s),
 	}
 }
 
@@ -27,7 +26,6 @@ func Client(conn net.Conn, key noise.DHKey, serverKey []byte) *Conn {
 		myKeys:   key,
 		PeerKey:  serverKey,
 		isClient: true,
-		cs:       noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashBLAKE2s),
 	}
 }
 

@@ -23,10 +23,12 @@ func main() {
 	rand.Read(buf)
 	c := make(chan bool, 10)
 
+	threads := 10
+
 	pub1, _ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
 	priv1, _ := base64.StdEncoding.DecodeString("vFilCT/FcyeShgbpTUrpru9n5yzZey8yfhsAx6DeL80=")
 
-	serverPub, _ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
+	//serverPub, _ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
 
 	clientKeys := noise.DHKey{
 		Public:  pub1,
@@ -34,12 +36,16 @@ func main() {
 	}
 
 	transport := &http.Transport{
-		MaxIdleConnsPerHost: 10,
+		MaxIdleConnsPerHost: threads,
 		DialTLS: func(network, addr string) (net.Conn, error) {
-			return noisetls.Dial(network, addr, clientKeys, serverPub)
+			conn, err := noisetls.Dial(network, addr, clientKeys, nil)
+			if err != nil {
+				fmt.Println(err)
+			}
+			return conn, err
 		},
 	}
-	for j := 0; j < 10; j++ {
+	for j := 0; j < threads; j++ {
 		go func() {
 
 			cli := &http.Client{
@@ -70,7 +76,7 @@ func main() {
 		}()
 	}
 
-	for j := 0; j < 10; j++ {
+	for j := 0; j < threads; j++ {
 		<-c
 	}
 	fmt.Println(time.Since(t).Seconds())

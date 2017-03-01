@@ -20,14 +20,14 @@ func ComposeInitiatorHandshakeMessages(s noise.DHKey, rs []byte) ([]byte, []*noi
 	if len(rs) != 0 && len(rs) != noise.DH25519.DHLen() {
 		return nil, nil, errors.New("only 32 byte curve25519 public keys are supported")
 	}
-	res := make([]byte, 2, 2048)
+	res := make([]byte, 0, 2048)
 
 	usedPatterns := []noise.HandshakePattern{noise.HandshakeXX}
 
 	prologue := make([]byte, 1, 1024)
 
 	//we checked this in init
-	prologue[0] = byte(len(protoPriorities[noise.HandshakeXX.Name]))
+	prologue[0] = byte(len(protoCipherPriorities[noise.HandshakeXX.Name]))
 
 	prologue = append(prologue, prologues[noise.HandshakeXX.Name]...)
 
@@ -36,18 +36,18 @@ func ComposeInitiatorHandshakeMessages(s noise.DHKey, rs []byte) ([]byte, []*noi
 		usedPatterns = append(usedPatterns, noise.HandshakeIK)
 		prologue = append(prologue, prologues[noise.HandshakeIK.Name]...)
 
-		if len(protoPriorities[noise.HandshakeIK.Name])+int(prologue[0]) > math.MaxUint8 {
+		if len(protoCipherPriorities[noise.HandshakeIK.Name])+int(prologue[0]) > math.MaxUint8 {
 			return nil, nil, errors.New("too many sub-messages for a single message")
 		}
 
-		prologue[0] += byte(len(protoPriorities[noise.HandshakeIK.Name]))
+		prologue[0] += byte(len(protoCipherPriorities[noise.HandshakeIK.Name]))
 	}
 
 	states := make([]*noise.HandshakeState, 0, prologue[0])
 
 	for _, pattern := range usedPatterns {
 
-		for _, csp := range protoPriorities[pattern.Name] {
+		for _, csp := range protoCipherPriorities[pattern.Name] {
 			cfg := handshakeConfigs[csp]
 
 			msg := res[len(res):] //append to res
@@ -95,12 +95,10 @@ func ComposeInitiatorHandshakeMessages(s noise.DHKey, rs []byte) ([]byte, []*noi
 		}
 	}
 
-	binary.BigEndian.PutUint16(res, uint16(len(res)-2)) //write total message length
-
 	return res, states, nil
 }
 
-func ParseHandshake(s noise.DHKey, handshake []byte) (states []*noise.HandshakeState, err error) {
+func ParseHandshake(s noise.DHKey, handshake []byte) (hs *noise.HandshakeState, messageIndex byte, err error) {
 
 	parsedPrologue := make([]byte, 1, 1024)
 	messages := make([]*HandshakeMessage, 0, 16)
@@ -113,7 +111,7 @@ func ParseHandshake(s noise.DHKey, handshake []byte) (states []*noise.HandshakeS
 		handshake, typeName, err = readData(handshake, 1) //read protocol name
 
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		parsedPrologue = append(parsedPrologue, byte(len(typeName)))
@@ -122,7 +120,7 @@ func ParseHandshake(s noise.DHKey, handshake []byte) (states []*noise.HandshakeS
 		handshake, msg, err = readData(handshake, 2) //read handshake data
 
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		//lookup protocol config
@@ -138,32 +136,41 @@ func ParseHandshake(s noise.DHKey, handshake []byte) (states []*noise.HandshakeS
 		}
 
 		if parsedPrologue[0] == math.MaxUint8 {
-			return nil, errors.New("too many messages")
+			return nil, 0, errors.New("too many messages")
 		}
 
 		parsedPrologue[0]++
 
 	}
 
-	states = make([]*noise.HandshakeState, 0, len(messages))
-	for _, m := range messages {
-		state := noise.NewHandshakeState(noise.Config{
-			StaticKeypair: s,
-			Initiator:     false,
-			Pattern:       m.Config.Pattern,
-			CipherSuite:   noise.NewCipherSuite(m.Config.DH, m.Config.Cipher, m.Config.Hash),
-			Prologue:      parsedPrologue,
-			Random:        rand.Reader,
-		})
+	//choose protocol that we want to use, according to server priorities
 
-		_, _, _, err := state.ReadMessage(nil, m.Message)
-		if err != nil {
-			return nil, err
+	for _, pr := range protoPriorities {
+		for _, p := range protoCipherPriorities[pr] {
+			for i, m := range messages {
+				if p == m.Config.NameKey {
+					state := noise.NewHandshakeState(noise.Config{
+						StaticKeypair: s,
+						Initiator:     false,
+						Pattern:       m.Config.Pattern,
+						CipherSuite:   noise.NewCipherSuite(m.Config.DH, m.Config.Cipher, m.Config.Hash),
+						Prologue:      parsedPrologue,
+						Random:        rand.Reader,
+					})
+
+					_, _, _, err := state.ReadMessage(nil, m.Message)
+					if err != nil {
+						return nil, 0, err
+					}
+
+					return state, byte(i), nil
+				}
+			}
+
 		}
-		states = append(states, state)
 	}
 
-	return states, nil
+	return nil, 0, errors.New("no supported protocols found")
 }
 
 func readData(data []byte, sizeBytes int) (rest []byte, msg []byte, err error) {
@@ -188,7 +195,7 @@ func readData(data []byte, sizeBytes int) (rest []byte, msg []byte, err error) {
 	}
 
 	if msgLen == 0 {
-		return nil, nil, errors.New("0 length messages are not supported")
+		return nil, nil, errors.New("zero length messages are not supported")
 	}
 
 	if len(data) < (msgLen + sizeBytes) {

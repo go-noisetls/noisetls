@@ -2,20 +2,18 @@ package noisetls
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/binary"
-	"github.com/flynn/noise"
-	"github.com/pkg/errors"
 	"io"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/flynn/noise"
+	"github.com/pkg/errors"
 )
 
 type Conn struct {
 	conn              net.Conn
-	cs                noise.CipherSuite
-	hs                *noise.HandshakeState
 	myKeys            noise.DHKey
 	PeerKey           []byte
 	in, out           halfConn
@@ -36,26 +34,26 @@ type halfConn struct {
 
 }
 
-func (h *halfConn) Encrypt(data []byte) []byte {
+func (h *halfConn) Encrypt(block *block) {
 	if h.cs != nil {
-		return h.cs.Encrypt(nil, nil, data)
+		block.reserve(len(block.data[2:]) + 16)
+		block.data = h.cs.Encrypt(block.data[:2], nil, block.data[2:])
 	}
-	return data
 }
 
 // decrypt checks and strips the mac and decrypts the data in b. Returns a
-// success boolean, the number of bytes to skip from the start of the record in
-// order to get the application payload, and an optional alert value.
+// success boolean
+
 func (h *halfConn) decrypt(b *block) error {
 	// pull out payload
-	payload := b.data[PacketHeaderLen:]
+	payload := b.data[2:]
 
 	if h.cs != nil {
 		payload, err := h.cs.Decrypt(payload[:0], nil, payload)
 		if err != nil {
 			return err
 		}
-		b.resize(PacketHeaderLen + len(payload))
+		b.resize(2 + len(payload))
 
 	}
 
@@ -152,41 +150,39 @@ func (c *Conn) Write(b []byte) (int, error) {
 		return 0, errors.New("internal error")
 	}
 
-	return c.writePacketLocked(PacketTypeData, b)
+	return c.writePacketLocked(b)
 }
 
-func (c *Conn) writePacket(typ uint16, data []byte) (int, error) {
+func (c *Conn) writePacket(data []byte) (int, error) {
 	c.out.Lock()
 	defer c.out.Unlock()
 
-	return c.writePacketLocked(typ, data)
+	return c.writePacketLocked(data)
 }
-func (c *Conn) writePacketLocked(typ uint16, data []byte) (int, error) {
+func (c *Conn) writePacketLocked(data []byte) (int, error) {
 
 	var n int
 	for len(data) > 0 {
 
 		m := len(data)
 
-		maxPayloadSize := c.maxPayloadSizeForWrite(typ)
+		maxPayloadSize := c.maxPayloadSizeForWrite()
 		if m > maxPayloadSize {
 			m = maxPayloadSize
 		}
 
-		payload := c.out.Encrypt(data[:m])
-		packet := &Packet{
-			Version: 1,
-			Type:    typ,
-			Payload: payload,
-		}
-		serialized, err := packet.Marshal()
-		if err != nil {
-			return 0, err
-		}
+		b := c.out.newBlock()
+		b.resize(2 + m)
+		copy(b.data[2:], data[:m])
 
-		if _, err := c.conn.Write(serialized); err != nil {
+		c.out.Encrypt(b)
+
+		binary.BigEndian.PutUint16(b.data, uint16(len(b.data)-2))
+
+		if _, err := c.conn.Write(b.data); err != nil {
 			return n, err
 		}
+		c.out.freeBlock(b)
 		n += m
 		data = data[m:]
 	}
@@ -194,7 +190,7 @@ func (c *Conn) writePacketLocked(typ uint16, data []byte) (int, error) {
 	return n, nil
 }
 
-func (c *Conn) maxPayloadSizeForWrite(typ uint16) int {
+func (c *Conn) maxPayloadSizeForWrite() int {
 	return MaxPayloadSize - 16
 }
 
@@ -215,7 +211,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 	defer c.in.Unlock()
 
 	if c.input == nil && c.in.err == nil {
-		if err := c.readPacket(PacketTypeData); err != nil {
+		if err := c.readPacket(); err != nil {
 			return 0, err
 		}
 	}
@@ -231,22 +227,10 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 	return n, err
 }
 
-// readRecord reads the next TLS record from the connection
+// readPacket reads the next noise packet from the connection
 // and updates the record layer state.
 // c.in.Mutex <= L; c.input == nil.
-func (c *Conn) readPacket(packetType uint16) error {
-	switch packetType {
-	default:
-		return c.in.setErrorLocked(errors.New("tls: unknown record type requested"))
-	case PacketTypeHandshake:
-		if c.handshakeComplete {
-			return c.in.setErrorLocked(errors.New("tls: handshake or ChangeCipherSpec requested while not in handshake"))
-		}
-	case PacketTypeData:
-		if !c.handshakeComplete {
-			return c.in.setErrorLocked(errors.New("tls: application data record requested while in handshake"))
-		}
-	}
+func (c *Conn) readPacket() error {
 
 	if c.rawInput == nil {
 		c.rawInput = c.in.newBlock()
@@ -254,54 +238,29 @@ func (c *Conn) readPacket(packetType uint16) error {
 	b := c.rawInput
 
 	// Read header, payload.
-	if err := b.readFromUntil(c.conn, PacketHeaderLen); err != nil {
+	if err := b.readFromUntil(c.conn, 2); err != nil {
 		return err
 	}
 
-	ver := binary.BigEndian.Uint16(b.data)
-	if ver != 1 {
+	n := int(binary.BigEndian.Uint16(b.data))
 
-	}
-	typ := binary.BigEndian.Uint16(b.data[2:])
-	n := int(binary.BigEndian.Uint16(b.data[4:]))
-
-	if err := b.readFromUntil(c.conn, PacketHeaderLen+n); err != nil {
+	if err := b.readFromUntil(c.conn, 2+n); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
 		return err
 	}
 
-	b, c.rawInput = c.in.splitBlock(b, PacketHeaderLen+n)
-	// Process message.
+	b, c.rawInput = c.in.splitBlock(b, 2+n)
+
 	err := c.in.decrypt(b)
 	if err != nil {
 		c.in.setErrorLocked(err)
 		return err
 	}
-	b.off = PacketHeaderLen
-	data := b.data[b.off:]
-
-	switch typ {
-	default:
-		return c.in.setErrorLocked(errors.New("unexpected packet type"))
-
-	case PacketTypeData:
-		if typ != packetType {
-			return c.in.setErrorLocked(errors.New("unexpected packet type"))
-		}
-		c.input = b
-		b = nil
-	case PacketTypeHandshake:
-		if typ != packetType {
-			return c.in.setErrorLocked(errors.New("unexpected packet type"))
-		}
-		c.hand.Write(data)
-	}
-
-	if b != nil {
-		c.in.freeBlock(b)
-	}
+	b.off = 2
+	c.input = b
+	b = nil
 	return c.in.err
 }
 
@@ -356,59 +315,132 @@ func (c *Conn) Handshake() error {
 
 func (c *Conn) RunClientHandshake() error {
 
-	c.InitHandshakeState(true, c.PeerKey)
-	buf := make([]byte, 1024*2)
-	msg, _, _ := c.hs.WriteMessage(buf[:0], nil)
-	_, err := c.writePacket(PacketTypeHandshake, msg)
+	msg, states, err := ComposeInitiatorHandshakeMessages(c.myKeys, c.PeerKey)
+
 	if err != nil {
 		return err
 	}
 
-	if err := c.in.err; err != nil {
-		return err
-	}
-	if err := c.readPacket(PacketTypeHandshake); err != nil {
-		return err
-	}
-
-	msg = c.hand.Next(c.hand.Len())
-	_, csOut, csIn, err := c.hs.ReadMessage(buf[:0], msg)
+	_, err = c.writePacket(msg)
 	if err != nil {
 		return err
 	}
-	c.out.cs = csOut
+
+	if err := c.readPacket(); err != nil {
+		return err
+	}
+
+	msg = c.input.data[c.input.off:]
+
+	c.in.freeBlock(c.input)
+	c.input = nil
+
+	if len(msg) < 1 {
+		return errors.New("message length is less than needed")
+	}
+
+	if int(msg[0]) > (len(states) - 1) {
+		return errors.New("message index out of bounds")
+	}
+
+	hs := states[msg[0]]
+
+	_, csIn, csOut, err := hs.ReadMessage(msg, msg[1:])
+	if err != nil {
+		return err
+	}
+
+	for csIn == nil && csOut == nil {
+		msg = msg[:0]
+		msg, csIn, csOut = hs.WriteMessage(msg, nil)
+		_, err = c.writePacket(msg)
+
+		if err != nil {
+			return err
+		}
+		if csIn != nil && csOut != nil {
+			break
+		}
+
+		if err := c.readPacket(); err != nil {
+			return err
+		}
+
+		msg := c.input.data[c.input.off:]
+		_, csIn, csOut, err = hs.ReadMessage(msg[:0], msg)
+		c.in.freeBlock(c.input)
+		c.input = nil
+
+		if err != nil {
+			return err
+		}
+	}
+
 	c.in.cs = csIn
+	c.out.cs = csOut
+
 	c.handshakeComplete = true
 	return nil
 }
 
 func (c *Conn) RunServerHandshake() error {
 
-	c.InitHandshakeState(false, nil)
-	buf := make([]byte, 1024*2)
-
-	if err := c.readPacket(PacketTypeHandshake); err != nil {
+	if err := c.readPacket(); err != nil {
 		return err
 	}
 
-	msg := c.hand.Next(c.hand.Len())
-	_, _, _, err := c.hs.ReadMessage(buf[:0], msg)
+	msg := c.input.data[c.input.off:]
+
+	hs, index, err := ParseHandshake(c.myKeys, msg)
+
+	c.in.freeBlock(c.input)
+	c.input = nil
 
 	if err != nil {
 		return err
 	}
-	msg, csIn, csOut := c.hs.WriteMessage(buf[:0], nil)
-	_, err = c.writePacket(PacketTypeHandshake, msg)
+
+	msg = msg[0:1]
+
+	msg[0] = index
+	msg, csOut, csIn := hs.WriteMessage(msg, nil)
+	_, err = c.writePacket(msg)
 
 	if err != nil {
 		return err
 	}
-	c.out.cs = csOut
+
+	for csIn == nil && csOut == nil {
+
+		if err := c.readPacket(); err != nil {
+			return err
+		}
+
+		msg := c.input.data[c.input.off:]
+		_, csOut, csIn, err = hs.ReadMessage(msg[:0], msg)
+		c.in.freeBlock(c.input)
+		c.input = nil
+
+		if err != nil {
+			return err
+		}
+
+		if csIn != nil && csOut != nil {
+			break
+		}
+
+		msg = msg[:0]
+		msg, csOut, csIn = hs.WriteMessage(msg, nil)
+		_, err = c.writePacket(msg)
+
+		if err != nil {
+			return err
+		}
+
+	}
+
 	c.in.cs = csIn
+	c.out.cs = csOut
 	c.handshakeComplete = true
 	return nil
-}
-
-func (c *Conn) InitHandshakeState(initiator bool, peerStatic []byte) {
-	c.hs = noise.NewHandshakeState(noise.Config{CipherSuite: c.cs, Random: rand.Reader, Pattern: noise.HandshakeIK, Initiator: initiator, Prologue: []byte("ABC"), StaticKeypair: c.myKeys, PeerStatic: peerStatic})
 }

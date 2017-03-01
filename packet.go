@@ -6,29 +6,17 @@ import (
 	"github.com/pkg/errors"
 )
 
-const (
-	PacketTypeHandshake uint16 = 4
-	PacketTypeData      uint16 = 10
-	PacketHeaderLen            = 8
-)
-
-type Packet struct {
-	Version uint16
-	Type    uint16
-	Payload []byte
-}
+type Packet []byte
 
 const MaxPayloadSize = 2<<16 - 1
 
-func (p *Packet) Marshal() ([]byte, error) {
-	if len(p.Payload) > MaxPayloadSize {
+func (p Packet) Marshal(buf []byte) ([]byte, error) {
+	if len(p) > MaxPayloadSize {
 		return nil, errors.New("Payload size exceeds 65kb")
 	}
-	res := make([]byte, len(p.Payload)+PacketHeaderLen)
-	binary.BigEndian.PutUint16(res, p.Version)
-	binary.BigEndian.PutUint16(res[2:], p.Type)
-	binary.BigEndian.PutUint16(res[4:], uint16(len(p.Payload)))
-	binary.BigEndian.PutUint16(res[6:], 0) //reserved
-	copy(res[PacketHeaderLen:], p.Payload)
+
+	res := append(buf, 0, 0)
+	binary.BigEndian.PutUint16(res, uint16(len(p)))
+	res = append(res, p...)
 	return res, nil
 }

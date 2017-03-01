@@ -37,8 +37,10 @@ var patternConfigs = []PatternConfig{{
 	UseRemoteKey:     true,
 }}
 
+var protoPriorities = []string{noise.HandshakeIK.Name, noise.HandshakeXX.Name}
+
 // preffered order of ciphersuites for each pattern
-var protoPriorities = make(map[string][]uint64)
+var protoCipherPriorities = make(map[string][]uint64)
 
 //a separate prologue for each pattern. The count of entries in cipherSuitePriorities is equal to the amount of entries,
 // used to form the corresponding prologue
@@ -50,7 +52,7 @@ func init() {
 	for _, pattern := range patternConfigs {
 
 		prologues[pattern.Name] = make([]byte, 0, 512)
-		protoPriorities[pattern.Name] = make([]uint64, 0, 8)
+		protoCipherPriorities[pattern.Name] = make([]uint64, 0, 8)
 		for _, dh := range dhFuncs {
 			for _, c := range ciphers {
 				for _, h := range hashes {
@@ -77,14 +79,14 @@ func init() {
 						NameKey:         nameKey,
 						UseRemoteStatic: pattern.UseRemoteKey,
 					}
-					protoPriorities[pattern.Name] = append(protoPriorities[pattern.Name], nameKey)
+					protoCipherPriorities[pattern.Name] = append(protoCipherPriorities[pattern.Name], nameKey)
 					prologues[pattern.Name] = append(prologues[pattern.Name], handshakeConfigs[nameKey].NameLength)
 					prologues[pattern.Name] = append(prologues[pattern.Name], name...)
 				}
 			}
 		}
 
-		if len(protoPriorities[pattern.Name]) > math.MaxUint8 {
+		if len(protoCipherPriorities[pattern.Name]) > math.MaxUint8 {
 			panic("too many message types for a single pattern")
 		}
 	}
