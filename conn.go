@@ -1,16 +1,21 @@
 package noisetls
 
 import (
-	"bytes"
 	"encoding/binary"
 	"io"
 	"net"
 	"sync"
 	"time"
 
+	"math"
+
 	"github.com/flynn/noise"
 	"github.com/pkg/errors"
 )
+
+const MaxPayloadSize = math.MaxUint16
+
+const uint8Size = 2 // uint16 takes 2 bytes
 
 type Conn struct {
 	conn              net.Conn
@@ -23,37 +28,68 @@ type Conn struct {
 	handshakeErr      error
 	input             *block
 	rawInput          *block
-	hand              bytes.Buffer // handshake data waiting to be read
+	padding           uint16
 }
 
 type halfConn struct {
 	sync.Mutex
-	cs    *noise.CipherState
-	err   error
-	bfree *block // list of free blocks
-
+	cs      *noise.CipherState
+	err     error
+	bfree   *block // list of free blocks
+	padding uint16
 }
 
-func (h *halfConn) Encrypt(block *block) {
+func (h *halfConn) Encrypt(data []byte) *block {
+	block := h.newBlock()
 	if h.cs != nil {
-		block.reserve(len(block.data[2:]) + 16)
-		block.data = h.cs.Encrypt(block.data[:2], nil, block.data[2:])
+
+		m := len(data)
+
+		paddingSize := uint16(0)
+		if h.padding > 0 {
+			dataLenWithoutPadding := uint16(uint8Size + m + 16) // 2 bytes padding size, data itself, MAC
+			paddingSize = h.padding - (dataLenWithoutPadding % h.padding)
+		}
+
+		blockSize := int(uint8Size + uint8Size + paddingSize + uint16(m) + 16) // 2 bytes block size, 2 bytes padding, padding itself, app data itself, MAC
+
+		block.resize(blockSize)
+
+		dataOffset := uint8Size + uint8Size + paddingSize
+		copy(block.data[dataOffset:], data)
+
+		binary.BigEndian.PutUint16(block.data, uint16(blockSize-uint8Size))
+		binary.BigEndian.PutUint16(block.data[uint8Size:], uint16(paddingSize))
+
+		block.data = h.cs.Encrypt(block.data[:uint8Size], nil, block.data[uint8Size:blockSize-16])
+		return block
 	}
+
+	block.resize(len(data) + uint8Size)
+	binary.BigEndian.PutUint16(block.data, uint16(len(data)))
+	copy(block.data[uint8Size:], data)
+	return block
 }
 
 // decrypt checks and strips the mac and decrypts the data in b. Returns a
 // success boolean
 
-func (h *halfConn) decrypt(b *block) error {
+func (h *halfConn) decrypt(b *block) (err error) {
 	// pull out payload
-	payload := b.data[2:]
-
+	payload := b.data[uint8Size:]
+	b.off = uint8Size
 	if h.cs != nil {
-		payload, err := h.cs.Decrypt(payload[:0], nil, payload)
+		payload, err = h.cs.Decrypt(payload[:0], nil, payload)
 		if err != nil {
 			return err
 		}
-		b.resize(2 + len(payload))
+		b.resize(uint8Size + len(payload))
+
+		paddingSize := binary.BigEndian.Uint16(b.data[uint8Size:])
+		if int(paddingSize) > (len(b.data) - 4) {
+			return errors.New("invalid padding")
+		}
+		b.off += int(uint8Size + paddingSize)
 
 	}
 
@@ -167,17 +203,11 @@ func (c *Conn) writePacketLocked(data []byte) (int, error) {
 		m := len(data)
 
 		maxPayloadSize := c.maxPayloadSizeForWrite()
-		if m > maxPayloadSize {
-			m = maxPayloadSize
+		if m > int(maxPayloadSize) {
+			m = int(maxPayloadSize)
 		}
 
-		b := c.out.newBlock()
-		b.resize(2 + m)
-		copy(b.data[2:], data[:m])
-
-		c.out.Encrypt(b)
-
-		binary.BigEndian.PutUint16(b.data, uint16(len(b.data)-2))
+		b := c.out.Encrypt(data[:m])
 
 		if _, err := c.conn.Write(b.data); err != nil {
 			return n, err
@@ -190,8 +220,8 @@ func (c *Conn) writePacketLocked(data []byte) (int, error) {
 	return n, nil
 }
 
-func (c *Conn) maxPayloadSizeForWrite() int {
-	return MaxPayloadSize - 16
+func (c *Conn) maxPayloadSizeForWrite() uint16 {
+	return MaxPayloadSize - uint8Size - 16
 }
 
 // Read reads data from the connection.
@@ -238,27 +268,27 @@ func (c *Conn) readPacket() error {
 	b := c.rawInput
 
 	// Read header, payload.
-	if err := b.readFromUntil(c.conn, 2); err != nil {
+	if err := b.readFromUntil(c.conn, uint8Size); err != nil {
 		return err
 	}
 
 	n := int(binary.BigEndian.Uint16(b.data))
 
-	if err := b.readFromUntil(c.conn, 2+n); err != nil {
+	if err := b.readFromUntil(c.conn, uint8Size+n); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
 		return err
 	}
 
-	b, c.rawInput = c.in.splitBlock(b, 2+n)
+	b, c.rawInput = c.in.splitBlock(b, uint8Size+n)
 
 	err := c.in.decrypt(b)
 	if err != nil {
 		c.in.setErrorLocked(err)
 		return err
 	}
-	b.off = 2
+
 	c.input = b
 	b = nil
 	return c.in.err
@@ -378,7 +408,7 @@ func (c *Conn) RunClientHandshake() error {
 
 	c.in.cs = csIn
 	c.out.cs = csOut
-
+	c.in.padding, c.out.padding = c.padding, c.padding
 	c.handshakeComplete = true
 	return nil
 }
@@ -441,6 +471,7 @@ func (c *Conn) RunServerHandshake() error {
 
 	c.in.cs = csIn
 	c.out.cs = csOut
+	c.in.padding, c.out.padding = c.padding, c.padding
 	c.handshakeComplete = true
 	return nil
 }

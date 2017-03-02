@@ -1,8 +1,9 @@
 package noisetls
 
 import (
-	"github.com/flynn/noise"
 	"net"
+
+	"github.com/flynn/noise"
 )
 
 // Server returns a new TLS server side connection
@@ -26,6 +27,7 @@ func Client(conn net.Conn, key noise.DHKey, serverKey []byte) *Conn {
 		myKeys:   key,
 		PeerKey:  serverKey,
 		isClient: true,
+		padding:  6133,
 	}
 }
 

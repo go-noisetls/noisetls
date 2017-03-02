@@ -46,15 +46,14 @@ func (b *block) readFromUntil(r io.Reader, n int) error {
 	b.reserve(n)
 	for {
 		m, err := r.Read(b.data[len(b.data):cap(b.data)])
-		b.data = b.data[0 : len(b.data)+m]
-		if len(b.data) >= n {
-			// TODO(bradfitz,agl): slightly suspicious
-			// that we're throwing away r.Read's err here.
-			break
-		}
 		if err != nil {
 			return err
 		}
+		b.data = b.data[0 : len(b.data)+m]
+		if len(b.data) >= n {
+			break
+		}
+
 	}
 	return nil
 }
