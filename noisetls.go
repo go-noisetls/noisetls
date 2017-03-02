@@ -12,8 +12,9 @@ import (
 // at least one certificate or else set GetCertificate.
 func Server(conn net.Conn, key noise.DHKey) *Conn {
 	return &Conn{
-		conn:   conn,
-		myKeys: key,
+		conn:    conn,
+		myKeys:  key,
+		padding: 5,
 	}
 }
 
@@ -27,7 +28,7 @@ func Client(conn net.Conn, key noise.DHKey, serverKey []byte) *Conn {
 		myKeys:   key,
 		PeerKey:  serverKey,
 		isClient: true,
-		padding:  6133,
+		padding:  5,
 	}
 }
 

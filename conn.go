@@ -15,8 +15,6 @@ import (
 
 const MaxPayloadSize = math.MaxUint16
 
-const uint8Size = 2 // uint16 takes 2 bytes
-
 type Conn struct {
 	conn              net.Conn
 	myKeys            noise.DHKey
@@ -29,111 +27,6 @@ type Conn struct {
 	input             *block
 	rawInput          *block
 	padding           uint16
-}
-
-type halfConn struct {
-	sync.Mutex
-	cs      *noise.CipherState
-	err     error
-	bfree   *block // list of free blocks
-	padding uint16
-}
-
-func (h *halfConn) Encrypt(data []byte) *block {
-	block := h.newBlock()
-	if h.cs != nil {
-
-		m := len(data)
-
-		paddingSize := uint16(0)
-		if h.padding > 0 {
-			dataLenWithoutPadding := uint16(uint8Size + m + 16) // 2 bytes padding size, data itself, MAC
-			paddingSize = h.padding - (dataLenWithoutPadding % h.padding)
-		}
-
-		blockSize := int(uint8Size + uint8Size + paddingSize + uint16(m) + 16) // 2 bytes block size, 2 bytes padding, padding itself, app data itself, MAC
-
-		block.resize(blockSize)
-
-		dataOffset := uint8Size + uint8Size + paddingSize
-		copy(block.data[dataOffset:], data)
-
-		binary.BigEndian.PutUint16(block.data, uint16(blockSize-uint8Size))
-		binary.BigEndian.PutUint16(block.data[uint8Size:], uint16(paddingSize))
-
-		block.data = h.cs.Encrypt(block.data[:uint8Size], nil, block.data[uint8Size:blockSize-16])
-		return block
-	}
-
-	block.resize(len(data) + uint8Size)
-	binary.BigEndian.PutUint16(block.data, uint16(len(data)))
-	copy(block.data[uint8Size:], data)
-	return block
-}
-
-// decrypt checks and strips the mac and decrypts the data in b. Returns a
-// success boolean
-
-func (h *halfConn) decrypt(b *block) (err error) {
-	// pull out payload
-	payload := b.data[uint8Size:]
-	b.off = uint8Size
-	if h.cs != nil {
-		payload, err = h.cs.Decrypt(payload[:0], nil, payload)
-		if err != nil {
-			return err
-		}
-		b.resize(uint8Size + len(payload))
-
-		paddingSize := binary.BigEndian.Uint16(b.data[uint8Size:])
-		if int(paddingSize) > (len(b.data) - 4) {
-			return errors.New("invalid padding")
-		}
-		b.off += int(uint8Size + paddingSize)
-
-	}
-
-	return nil
-}
-
-func (hc *halfConn) setErrorLocked(err error) error {
-	hc.err = err
-	return err
-}
-
-// newBlock allocates a new block, from hc's free list if possible.
-func (hc *halfConn) newBlock() *block {
-	b := hc.bfree
-	if b == nil {
-		return new(block)
-	}
-	hc.bfree = b.link
-	b.link = nil
-	b.resize(0)
-	return b
-}
-
-// freeBlock returns a block to hc's free list.
-// The protocol is such that each side only has a block or two on
-// its free list at a time, so there's no need to worry about
-// trimming the list, etc.
-func (hc *halfConn) freeBlock(b *block) {
-	b.link = hc.bfree
-	hc.bfree = b
-}
-
-// splitBlock splits a block after the first n bytes,
-// returning a block with those n bytes and a
-// block with the remainder.  the latter may be nil.
-func (hc *halfConn) splitBlock(b *block, n int) (*block, *block) {
-	if len(b.data) <= n {
-		return b, nil
-	}
-	bb := hc.newBlock()
-	bb.resize(len(b.data) - n)
-	copy(bb.data, b.data[n:])
-	b.data = b.data[0:n]
-	return b, bb
 }
 
 // Access to net.Conn methods.
@@ -207,7 +100,7 @@ func (c *Conn) writePacketLocked(data []byte) (int, error) {
 			m = int(maxPayloadSize)
 		}
 
-		b := c.out.Encrypt(data[:m])
+		b := c.out.encryptIfNeeded(data[:m])
 
 		if _, err := c.conn.Write(b.data); err != nil {
 			return n, err
@@ -283,7 +176,7 @@ func (c *Conn) readPacket() error {
 
 	b, c.rawInput = c.in.splitBlock(b, uint8Size+n)
 
-	err := c.in.decrypt(b)
+	err := c.in.decryptIfNeeded(b)
 	if err != nil {
 		c.in.setErrorLocked(err)
 		return err

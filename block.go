@@ -1,6 +1,9 @@
 package noisetls
 
-import "io"
+import (
+	"encoding/binary"
+	"io"
+)
 
 // A block is a simple data buffer.
 type block struct {
@@ -62,4 +65,32 @@ func (b *block) Read(p []byte) (n int, err error) {
 	n = copy(p, b.data[b.off:])
 	b.off += n
 	return
+}
+
+// PrepareStructure takes padding size, length of data to be transmitted and creates the following packet structure:
+// [packet size] | [padding size] | padding | data | MAC
+// everything will be encrypted except for the packet size
+// If padding is used, then packet size is either a multiple of paddingSize or MaxPayloadSize
+// Returns slice to encrypt
+func (b *block) PrepareStructure(paddingSize int, data []byte) []byte {
+	payloadSize := uint8Size + len(data) + macSize // 2 bytes padding size, data itself, MAC
+
+	if paddingSize > 0 {
+		paddingSize -= payloadSize % paddingSize
+		if payloadSize+paddingSize > MaxPayloadSize {
+			paddingSize = MaxPayloadSize - payloadSize
+		}
+	}
+
+	packetSize := uint8Size + paddingSize + payloadSize // 2 bytes block size, 2 bytes padding size, padding itself, app data itself, MAC
+
+	b.resize(packetSize)
+	dataOffset := uint8Size + uint8Size + paddingSize
+
+	b.off = dataOffset
+	copy(b.data[b.off:], data)
+
+	binary.BigEndian.PutUint16(b.data, uint16(packetSize-uint8Size))    //write total packet size
+	binary.BigEndian.PutUint16(b.data[uint8Size:], uint16(paddingSize)) // write padding size
+	return b.data[uint8Size : packetSize-macSize]
 }
