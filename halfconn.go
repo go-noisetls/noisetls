@@ -41,10 +41,11 @@ func (h *halfConn) encryptIfNeeded(data []byte) *block {
 // Returns error if parsing failed
 
 func (h *halfConn) decryptIfNeeded(b *block) (err error) {
-	// pull out payload
+
 	if len(b.data) < (uint8Size + uint8Size) {
 		return errors.New("packet is too small")
 	}
+	// pull out payload
 
 	payload := b.data[uint8Size:]
 	b.off = uint8Size
@@ -53,14 +54,15 @@ func (h *halfConn) decryptIfNeeded(b *block) (err error) {
 		if err != nil {
 			return err
 		}
-		b.resize(uint8Size + len(payload))
+		b.resize(uint8Size + len(payload)) //strip MAC off
 	}
 
+	//strip padding off
 	paddingSize := binary.BigEndian.Uint16(b.data[uint8Size:])
 	if int(paddingSize) > (len(b.data) - (uint8Size + uint8Size)) {
 		return errors.New("invalid padding length")
 	}
-	b.off += int(uint8Size + paddingSize)
+	b.off += int(uint8Size + paddingSize) //skip padding
 
 	return nil
 }
