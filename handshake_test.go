@@ -1,7 +1,6 @@
 package noisetls
 
 import (
-	"encoding/binary"
 	"testing"
 
 	"github.com/flynn/noise"
@@ -19,10 +18,7 @@ func TestHandshake(t *testing.T) {
 	hm, istates, err := ComposeInitiatorHandshakeMessages(ki, ks.Public)
 	assert.NoError(t, err)
 
-	size := binary.BigEndian.Uint16(hm)
-	assert.Equal(t, size, uint16(len(hm[2:])))
-
-	rstate, index, err := ParseHandshake(ks, hm[2:])
+	rstate, index, err := ParseHandshake(ks, hm)
 	assert.NoError(t, err)
 
 	msg := make([]byte, 10*1024)

@@ -114,7 +114,7 @@ func (c *Conn) writePacketLocked(data []byte) (int, error) {
 }
 
 func (c *Conn) maxPayloadSizeForWrite() uint16 {
-	return MaxPayloadSize - uint8Size - 16
+	return MaxPayloadSize - uint16Size - 16
 }
 
 // Read reads data from the connection.
@@ -161,20 +161,20 @@ func (c *Conn) readPacket() error {
 	b := c.rawInput
 
 	// Read header, payload.
-	if err := b.readFromUntil(c.conn, uint8Size); err != nil {
+	if err := b.readFromUntil(c.conn, uint16Size); err != nil {
 		return err
 	}
 
 	n := int(binary.BigEndian.Uint16(b.data))
 
-	if err := b.readFromUntil(c.conn, uint8Size+n); err != nil {
+	if err := b.readFromUntil(c.conn, uint16Size+n); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
 		return err
 	}
 
-	b, c.rawInput = c.in.splitBlock(b, uint8Size+n)
+	b, c.rawInput = c.in.splitBlock(b, uint16Size+n)
 
 	err := c.in.decryptIfNeeded(b)
 	if err != nil {

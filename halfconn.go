@@ -17,8 +17,8 @@ type halfConn struct {
 	padding uint16
 }
 
-const uint8Size = 2 // uint16 takes 2 bytes
-const macSize = 16  // GCM and Poly1305 add 16 byte MACs
+const uint16Size = 2 // uint16 takes 2 bytes
+const macSize = 16   // GCM and Poly1305 add 16 byte MACs
 
 // encryptIfNeeded prepares packet structure depending on padding and data length.
 // It also encrypts it if cipher is set up (handshake is done)
@@ -28,7 +28,7 @@ func (h *halfConn) encryptIfNeeded(data []byte) *block {
 	if h.cs != nil {
 
 		sliceToEncrypt := block.PrepareStructure(int(h.padding), data, macSize)
-		block.data = h.cs.Encrypt(block.data[:uint8Size], nil, sliceToEncrypt)
+		block.data = h.cs.Encrypt(block.data[:uint16Size], nil, sliceToEncrypt)
 		return block
 	}
 
@@ -42,27 +42,27 @@ func (h *halfConn) encryptIfNeeded(data []byte) *block {
 
 func (h *halfConn) decryptIfNeeded(b *block) (err error) {
 
-	if len(b.data) < (uint8Size + uint8Size) {
+	if len(b.data) < (uint16Size + uint16Size) {
 		return errors.New("packet is too small")
 	}
 	// pull out payload
 
-	payload := b.data[uint8Size:]
-	b.off = uint8Size
+	payload := b.data[uint16Size:]
+	b.off = uint16Size
 	if h.cs != nil {
 		payload, err = h.cs.Decrypt(payload[:0], nil, payload)
 		if err != nil {
 			return err
 		}
-		b.resize(uint8Size + len(payload)) //strip MAC off
+		b.resize(uint16Size + len(payload)) //strip MAC off
 	}
 
 	//strip padding off
-	paddingSize := binary.BigEndian.Uint16(b.data[uint8Size:])
-	if int(paddingSize) > (len(b.data) - (uint8Size + uint8Size)) {
+	paddingSize := binary.BigEndian.Uint16(b.data[uint16Size:])
+	if int(paddingSize) > (len(b.data) - (uint16Size + uint16Size)) {
 		return errors.New("invalid padding length")
 	}
-	b.off += int(uint8Size + paddingSize) //skip padding
+	b.off += int(uint16Size + paddingSize) //skip padding
 
 	return nil
 }

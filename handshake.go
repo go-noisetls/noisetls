@@ -82,19 +82,20 @@ func ComposeInitiatorHandshakeMessages(s noise.DHKey, rs []byte) ([]byte, []*noi
 
 			msg, _, _ = state.WriteMessage(msg, nil)
 
+			binary.BigEndian.PutUint16(msg, uint16(len(msg)-uint16Size)) //write calculated length at the beginning
+
 			states = append(states, state)
 
-			binary.BigEndian.PutUint16(msg, uint16(len(msg)-2)) //write calculated length at the beginning
+
 
 			// we cannot send the message if its length exceeds 2^16 - 1
-			if len(res)+len(msg) > math.MaxUint16 {
+			if len(res)+len(msg) > (math.MaxUint16 - uint16Size) {
 				return nil, nil, errors.New("Message is too big")
 			}
-			res = append(res, msg...)
+ 			res = append(res, msg...)
 
 		}
 	}
-
 	return res, states, nil
 }
 

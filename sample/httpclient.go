@@ -28,7 +28,7 @@ func main() {
 	pub1, _ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
 	priv1, _ := base64.StdEncoding.DecodeString("vFilCT/FcyeShgbpTUrpru9n5yzZey8yfhsAx6DeL80=")
 
-	//serverPub, _ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
+	serverPub, _ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
 
 	clientKeys := noise.DHKey{
 		Public:  pub1,
@@ -38,7 +38,7 @@ func main() {
 	transport := &http.Transport{
 		MaxIdleConnsPerHost: threads,
 		DialTLS: func(network, addr string) (net.Conn, error) {
-			conn, err := noisetls.Dial(network, addr, clientKeys, nil)
+			conn, err := noisetls.Dial(network, addr, clientKeys, serverPub)
 			if err != nil {
 				fmt.Println(err)
 			}
