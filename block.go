@@ -72,8 +72,8 @@ func (b *block) Read(p []byte) (n int, err error) {
 // everything will be encrypted except for the packet size
 // If padding is used, then packet size is either a multiple of paddingSize or MaxPayloadSize
 // Returns slice to encrypt
-func (b *block) PrepareStructure(paddingSize int, data []byte) []byte {
-	payloadSize := uint8Size + len(data) + macSize // 2 bytes padding size, data itself, MAC
+func (b *block) PrepareStructure(paddingSize int, data []byte, overhead int) []byte {
+	payloadSize := uint8Size + len(data) + overhead // 2 bytes padding size, data itself, MAC
 
 	if paddingSize > 0 {
 		paddingSize -= payloadSize % paddingSize
@@ -92,5 +92,5 @@ func (b *block) PrepareStructure(paddingSize int, data []byte) []byte {
 
 	binary.BigEndian.PutUint16(b.data, uint16(packetSize-uint8Size))    //write total packet size
 	binary.BigEndian.PutUint16(b.data[uint8Size:], uint16(paddingSize)) // write padding size
-	return b.data[uint8Size : packetSize-macSize]
+	return b.data[uint8Size : packetSize-overhead]
 }

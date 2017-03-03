@@ -26,17 +26,13 @@ func (h *halfConn) encryptIfNeeded(data []byte) *block {
 	block := h.newBlock()
 
 	if h.cs != nil {
-		sliceToEncrypt := block.PrepareStructure(int(h.padding), data)
 
-		//we reuse block's storage because we already placed data correctly inside it.
-		//Encrypt will place encrypted data at offset
+		sliceToEncrypt := block.PrepareStructure(int(h.padding), data, macSize)
 		block.data = h.cs.Encrypt(block.data[:uint8Size], nil, sliceToEncrypt)
 		return block
 	}
 
-	block.resize(uint8Size + len(data))
-	binary.BigEndian.PutUint16(block.data, uint16(len(data)))
-	copy(block.data[uint8Size:], data)
+	block.PrepareStructure(0, data, 0)
 
 	return block
 }
@@ -46,6 +42,10 @@ func (h *halfConn) encryptIfNeeded(data []byte) *block {
 
 func (h *halfConn) decryptIfNeeded(b *block) (err error) {
 	// pull out payload
+	if len(b.data) < (uint8Size + uint8Size) {
+		return errors.New("packet is too small")
+	}
+
 	payload := b.data[uint8Size:]
 	b.off = uint8Size
 	if h.cs != nil {
@@ -54,14 +54,13 @@ func (h *halfConn) decryptIfNeeded(b *block) (err error) {
 			return err
 		}
 		b.resize(uint8Size + len(payload))
-
-		paddingSize := binary.BigEndian.Uint16(b.data[uint8Size:])
-		if int(paddingSize) > (len(b.data) - 4) {
-			return errors.New("invalid padding length")
-		}
-		b.off += int(uint8Size + paddingSize)
-
 	}
+
+	paddingSize := binary.BigEndian.Uint16(b.data[uint8Size:])
+	if int(paddingSize) > (len(b.data) - (uint8Size + uint8Size)) {
+		return errors.New("invalid padding length")
+	}
+	b.off += int(uint8Size + paddingSize)
 
 	return nil
 }
