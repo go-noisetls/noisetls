@@ -9,6 +9,8 @@ import (
 
 	"math"
 
+	"fmt"
+
 	"github.com/flynn/noise"
 	"github.com/pkg/errors"
 )
@@ -27,6 +29,7 @@ type Conn struct {
 	input             *block
 	rawInput          *block
 	padding           uint16
+	payload           []byte
 }
 
 // Access to net.Conn methods.
@@ -238,7 +241,7 @@ func (c *Conn) Handshake() error {
 
 func (c *Conn) RunClientHandshake() error {
 
-	msg, states, err := ComposeInitiatorHandshakeMessages(c.myKeys, c.PeerKey)
+	msg, states, err := ComposeInitiatorHandshakeMessages(c.myKeys, c.PeerKey, c.payload)
 
 	if err != nil {
 		return err
@@ -268,14 +271,25 @@ func (c *Conn) RunClientHandshake() error {
 
 	hs := states[msg[0]]
 
-	_, csIn, csOut, err := hs.ReadMessage(msg, msg[1:])
+	payload, csIn, csOut, err := hs.ReadMessage(msg[:0], msg[1:])
+	if err != nil {
+		return err
+	}
+
+	err = processPayload(payload)
+
 	if err != nil {
 		return err
 	}
 
 	for csIn == nil && csOut == nil {
 		msg = msg[:0]
-		msg, csIn, csOut = hs.WriteMessage(msg, nil)
+		if len(c.PeerKey) == 0 {
+			msg, csIn, csOut = hs.WriteMessage(msg, payload)
+		} else {
+			msg, csIn, csOut = hs.WriteMessage(msg, nil)
+		}
+
 		_, err = c.writePacket(msg)
 
 		if err != nil {
@@ -314,7 +328,7 @@ func (c *Conn) RunServerHandshake() error {
 
 	msg := c.input.data[c.input.off:]
 
-	hs, index, err := ParseHandshake(c.myKeys, msg)
+	payload, hs, index, err := ParseHandshake(c.myKeys, msg)
 
 	c.in.freeBlock(c.input)
 	c.input = nil
@@ -323,10 +337,17 @@ func (c *Conn) RunServerHandshake() error {
 		return err
 	}
 
+	err = processPayload(payload)
+	if err != nil {
+		return err
+	}
+
 	msg = msg[0:1]
 
 	msg[0] = index
-	msg, csOut, csIn := hs.WriteMessage(msg, nil)
+
+	//server can safely answer with payload as both XX and IK encrypt it
+	msg, csOut, csIn := hs.WriteMessage(msg, c.payload)
 	_, err = c.writePacket(msg)
 
 	if err != nil {
@@ -340,7 +361,8 @@ func (c *Conn) RunServerHandshake() error {
 		}
 
 		msg := c.input.data[c.input.off:]
-		_, csOut, csIn, err = hs.ReadMessage(msg[:0], msg)
+		payload, csOut, csIn, err = hs.ReadMessage(msg[:0], msg)
+
 		c.in.freeBlock(c.input)
 		c.input = nil
 
@@ -348,12 +370,14 @@ func (c *Conn) RunServerHandshake() error {
 			return err
 		}
 
+		processPayload(payload)
+
 		if csIn != nil && csOut != nil {
 			break
 		}
 
 		msg = msg[:0]
-		msg, csOut, csIn = hs.WriteMessage(msg, nil)
+		msg, csOut, csIn = hs.WriteMessage(msg, c.payload)
 		_, err = c.writePacket(msg)
 
 		if err != nil {
@@ -366,5 +390,12 @@ func (c *Conn) RunServerHandshake() error {
 	c.out.cs = csOut
 	c.in.padding, c.out.padding = c.padding, c.padding
 	c.handshakeComplete = true
+	return nil
+}
+
+func processPayload(payload []byte) error {
+	if len(payload) > 1 {
+		fmt.Println(payload)
+	}
 	return nil
 }

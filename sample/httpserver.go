@@ -47,7 +47,9 @@ func main() {
 		Private: priv,
 	}
 
-	l, err := noisetls.Listen("tcp", ":5000", serverKeys)
+	payload := []byte(`{json:yesyes}`)
+
+	l, err := noisetls.Listen("tcp", ":5000", serverKeys, payload)
 	if err != nil {
 		fmt.Println("Error listening:", err)
 		os.Exit(1)

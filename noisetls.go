@@ -10,11 +10,12 @@ import (
 // using conn as the underlying transport.
 // The configuration config must be non-nil and must include
 // at least one certificate or else set GetCertificate.
-func Server(conn net.Conn, key noise.DHKey) *Conn {
+func Server(conn net.Conn, key noise.DHKey, payload []byte) *Conn {
 	return &Conn{
 		conn:    conn,
 		myKeys:  key,
-		padding: 5,
+		padding: 128,
+		payload: payload,
 	}
 }
 
@@ -22,20 +23,22 @@ func Server(conn net.Conn, key noise.DHKey) *Conn {
 // using conn as the underlying transport.
 // The config cannot be nil: users must set either ServerName or
 // InsecureSkipVerify in the config.
-func Client(conn net.Conn, key noise.DHKey, serverKey []byte) *Conn {
+func Client(conn net.Conn, key noise.DHKey, serverKey []byte, payload []byte) *Conn {
 	return &Conn{
 		conn:     conn,
 		myKeys:   key,
 		PeerKey:  serverKey,
 		isClient: true,
-		padding:  5,
+		padding:  128,
+		payload:  payload,
 	}
 }
 
 // A listener implements a network listener (net.Listener) for TLS connections.
 type listener struct {
 	net.Listener
-	key noise.DHKey
+	key     noise.DHKey
+	payload []byte
 }
 
 // Accept waits for and returns the next incoming TLS connection.
@@ -45,27 +48,28 @@ func (l *listener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Server(c, l.key), nil
+	return Server(c, l.key, l.payload), nil
 }
 
 // NewListener creates a Listener which accepts connections from an inner
 // Listener and wraps each connection with Server.
-func NewListener(inner net.Listener, key noise.DHKey) net.Listener {
+func NewListener(inner net.Listener, key noise.DHKey, payload []byte) net.Listener {
 	l := new(listener)
 	l.Listener = inner
 	l.key = key
+	l.payload = payload
 	return l
 }
 
 // Listen creates a TLS listener accepting connections on the
 // given network address using net.Listen.
-func Listen(network, laddr string, key noise.DHKey) (net.Listener, error) {
+func Listen(network, laddr string, key noise.DHKey, payload []byte) (net.Listener, error) {
 
 	l, err := net.Listen(network, laddr)
 	if err != nil {
 		return nil, err
 	}
-	return NewListener(l, key), nil
+	return NewListener(l, key, payload), nil
 }
 
 type timeoutError struct{}
@@ -81,25 +85,18 @@ func (timeoutError) Temporary() bool { return true }
 //
 // DialWithDialer interprets a nil configuration as equivalent to the zero
 // configuration; see the documentation of Config for the defaults.
-func DialWithDialer(dialer *net.Dialer, network, addr string, key noise.DHKey, serverKey []byte) (*Conn, error) {
+func DialWithDialer(dialer *net.Dialer, network, addr string, key noise.DHKey, serverKey []byte, payload []byte) (*Conn, error) {
 
 	rawConn, err := dialer.Dial(network, addr)
 	if err != nil {
 		return nil, err
 	}
 
-	conn := Client(rawConn, key, serverKey)
-
-	err = conn.Handshake()
-
-	if err != nil {
-		rawConn.Close()
-		return nil, err
-	}
+	conn := Client(rawConn, key, serverKey, payload)
 
 	return conn, nil
 }
 
-func Dial(network, addr string, key noise.DHKey, serverKey []byte) (*Conn, error) {
-	return DialWithDialer(new(net.Dialer), network, addr, key, serverKey)
+func Dial(network, addr string, key noise.DHKey, serverKey []byte, payload []byte) (*Conn, error) {
+	return DialWithDialer(new(net.Dialer), network, addr, key, serverKey, payload)
 }

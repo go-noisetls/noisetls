@@ -23,7 +23,7 @@ func main() {
 	rand.Read(buf)
 	c := make(chan bool, 10)
 
-	threads := 10
+	threads := 1
 
 	pub1, _ := base64.StdEncoding.DecodeString("J6TRfRXR5skWt6w5cFyaBxX8LPeIVxboZTLXTMhk4HM=")
 	priv1, _ := base64.StdEncoding.DecodeString("vFilCT/FcyeShgbpTUrpru9n5yzZey8yfhsAx6DeL80=")
@@ -35,10 +35,12 @@ func main() {
 		Private: priv1,
 	}
 
+	payload := []byte(`{json:yes}111`)
+
 	transport := &http.Transport{
 		MaxIdleConnsPerHost: threads,
 		DialTLS: func(network, addr string) (net.Conn, error) {
-			conn, err := noisetls.Dial(network, addr, clientKeys, serverPub)
+			conn, err := noisetls.Dial(network, addr, clientKeys, serverPub, payload)
 			if err != nil {
 				fmt.Println(err)
 			}

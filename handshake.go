@@ -15,7 +15,7 @@ type HandshakeMessage struct {
 	Message []byte
 }
 
-func ComposeInitiatorHandshakeMessages(s noise.DHKey, rs []byte) ([]byte, []*noise.HandshakeState, error) {
+func ComposeInitiatorHandshakeMessages(s noise.DHKey, rs []byte, payload []byte) ([]byte, []*noise.HandshakeState, error) {
 
 	if len(rs) != 0 && len(rs) != noise.DH25519.DHLen() {
 		return nil, nil, errors.New("only 32 byte curve25519 public keys are supported")
@@ -80,7 +80,11 @@ func ComposeInitiatorHandshakeMessages(s noise.DHKey, rs []byte) ([]byte, []*noi
 				Random:        rand.Reader,
 			})
 
-			msg, _, _ = state.WriteMessage(msg, nil)
+			if CanWrite(cfg.Pattern, 0) {
+				msg, _, _ = state.WriteMessage(msg, payload)
+			} else {
+				msg, _, _ = state.WriteMessage(msg, nil)
+			}
 
 			binary.BigEndian.PutUint16(msg, uint16(len(msg)-uint16Size)) //write calculated length at the beginning
 
@@ -99,7 +103,16 @@ func ComposeInitiatorHandshakeMessages(s noise.DHKey, rs []byte) ([]byte, []*noi
 	return res, states, nil
 }
 
-func ParseHandshake(s noise.DHKey, handshake []byte) (hs *noise.HandshakeState, messageIndex byte, err error) {
+func CanWrite(pattern noise.HandshakePattern, msgIndex int) bool {
+	for _, m := range pattern.Messages[msgIndex] {
+		if m == noise.MessagePatternS {
+			return true
+		}
+	}
+	return false
+}
+
+func ParseHandshake(s noise.DHKey, handshake []byte) (payload []byte, hs *noise.HandshakeState, messageIndex byte, err error) {
 
 	parsedPrologue := make([]byte, 1, 1024)
 	messages := make([]*HandshakeMessage, 0, 16)
@@ -112,7 +125,7 @@ func ParseHandshake(s noise.DHKey, handshake []byte) (hs *noise.HandshakeState, 
 		handshake, typeName, err = readData(handshake, 1) //read protocol name
 
 		if err != nil {
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 
 		parsedPrologue = append(parsedPrologue, byte(len(typeName)))
@@ -121,7 +134,7 @@ func ParseHandshake(s noise.DHKey, handshake []byte) (hs *noise.HandshakeState, 
 		handshake, msg, err = readData(handshake, 2) //read handshake data
 
 		if err != nil {
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 
 		//lookup protocol config
@@ -137,7 +150,7 @@ func ParseHandshake(s noise.DHKey, handshake []byte) (hs *noise.HandshakeState, 
 		}
 
 		if parsedPrologue[0] == math.MaxUint8 {
-			return nil, 0, errors.New("too many messages")
+			return nil, nil, 0, errors.New("too many messages")
 		}
 
 		parsedPrologue[0]++
@@ -159,19 +172,19 @@ func ParseHandshake(s noise.DHKey, handshake []byte) (hs *noise.HandshakeState, 
 						Random:        rand.Reader,
 					})
 
-					_, _, _, err := state.ReadMessage(nil, m.Message)
+					payload, _, _, err := state.ReadMessage(nil, m.Message)
 					if err != nil {
-						return nil, 0, err
+						return nil, nil, 0, err
 					}
 
-					return state, byte(i), nil
+					return payload, state, byte(i), nil
 				}
 			}
 
 		}
 	}
 
-	return nil, 0, errors.New("no supported protocols found")
+	return nil, nil, 0, errors.New("no supported protocols found")
 }
 
 func readData(data []byte, sizeBytes int) (rest []byte, msg []byte, err error) {
