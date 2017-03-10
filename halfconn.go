@@ -17,54 +17,65 @@ type halfConn struct {
 	padding uint16
 }
 
-const uint16Size = 2 // uint16 takes 2 bytes
-const macSize = 16   // GCM and Poly1305 add 16 byte MACs
+const (
+	uint16Size    = 2  // uint16 takes 2 bytes
+	msgHeaderSize = 4  // message inside packet has type and length
+	macSize       = 16 // GCM and Poly1305 add 16 byte MACs
+)
 
 // encryptIfNeeded prepares packet structure depending on padding and data length.
 // It also encrypts it if cipher is set up (handshake is done)
-func (h *halfConn) encryptIfNeeded(data []byte) *block {
-	block := h.newBlock()
+func (h *halfConn) encryptIfNeeded(block *block) []byte {
 
 	if h.cs != nil {
 
-		sliceToEncrypt := block.PrepareStructure(int(h.padding), data, macSize)
-		block.data = h.cs.Encrypt(block.data[:uint16Size], nil, sliceToEncrypt)
-		return block
+		if len(block.data) > (MaxPayloadSize - macSize - uint16Size) {
+			panic("data is too big to be sent")
+		}
+
+		payloadSize := len(block.data) - uint16Size + macSize
+
+		block.data = h.cs.Encrypt(block.data[:uint16Size], nil, block.data[uint16Size:])
+		binary.BigEndian.PutUint16(block.data, uint16(payloadSize))
+
+		return block.data
 	}
 
-	block.PrepareStructure(0, data, 0)
+	if len(block.data) > MaxPayloadSize-uint16Size {
+		panic("data is too big to be sent")
+	}
 
-	return block
+	binary.BigEndian.PutUint16(block.data, uint16(len(block.data)-uint16Size))
+
+	return block.data
 }
 
 // decryptIfNeeded checks and strips the mac and decrypts the data in b.
 // Returns error if parsing failed
 
-func (h *halfConn) decryptIfNeeded(b *block) (err error) {
+func (h *halfConn) decryptIfNeeded(b *block) (data []byte, err error) {
 
-	if len(b.data) < (uint16Size + uint16Size) {
-		return errors.New("packet is too small")
+	if len(b.data) < (uint16Size * 3) {
+		return nil, errors.New("packet is too small")
 	}
 	// pull out payload
 
 	payload := b.data[uint16Size:]
-	b.off = uint16Size
+
+	packetLen := binary.BigEndian.Uint16(b.data)
+	if int(packetLen) != len(payload) { //this is supposed to be checked before method call
+		panic("invalid payload size")
+	}
+
 	if h.cs != nil {
 		payload, err = h.cs.Decrypt(payload[:0], nil, payload)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		b.resize(uint16Size + len(payload)) //strip MAC off
+		return payload, nil
 	}
 
-	//strip padding off
-	paddingSize := binary.BigEndian.Uint16(b.data[uint16Size:])
-	if int(paddingSize) > (len(b.data) - (uint16Size + uint16Size)) {
-		return errors.New("invalid padding length")
-	}
-	b.off += int(uint16Size + paddingSize) //skip padding
-
-	return nil
+	return payload, nil
 }
 
 func (h *halfConn) setErrorLocked(err error) error {
@@ -82,6 +93,7 @@ func (h *halfConn) newBlock() *block {
 	h.bfree = b.link
 	b.link = nil
 	b.resize(0)
+	b.off = 0
 	return b
 }
 
@@ -92,6 +104,7 @@ func (h *halfConn) newBlock() *block {
 func (h *halfConn) freeBlock(b *block) {
 	b.link = h.bfree
 	h.bfree = b
+
 }
 
 // splitBlock splits a block after the first n bytes,

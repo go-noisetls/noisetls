@@ -19,7 +19,7 @@ func main() {
 
 	t := time.Now()
 	n := 10000
-	buf := make([]byte, 20048+8)
+	buf := make([]byte, 55)
 	rand.Read(buf)
 	c := make(chan bool, 10)
 
@@ -55,7 +55,7 @@ func main() {
 			}
 			for i := 0; i < n; i++ {
 				reader := bytes.NewReader(buf)
-				req, err := http.NewRequest("POST", "https://127.0.0.1:5000/", reader)
+				req, err := http.NewRequest("POST", "https://127.0.0.1:12888/", reader)
 				if err != nil {
 					panic(err)
 				}

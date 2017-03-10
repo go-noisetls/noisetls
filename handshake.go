@@ -90,13 +90,11 @@ func ComposeInitiatorHandshakeMessages(s noise.DHKey, rs []byte, payload []byte)
 
 			states = append(states, state)
 
-
-
 			// we cannot send the message if its length exceeds 2^16 - 1
 			if len(res)+len(msg) > (math.MaxUint16 - uint16Size) {
 				return nil, nil, errors.New("Message is too big")
 			}
- 			res = append(res, msg...)
+			res = append(res, msg...)
 
 		}
 	}

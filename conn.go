@@ -91,6 +91,14 @@ func (c *Conn) writePacket(data []byte) (int, error) {
 
 	return c.writePacketLocked(data)
 }
+
+//InitializePacket adds additional sub-messages if needed
+func (c *Conn) InitializePacket() *block {
+	block := c.out.newBlock()
+	block.resize(uint16Size)
+	return block
+}
+
 func (c *Conn) writePacketLocked(data []byte) (int, error) {
 
 	var n int
@@ -98,26 +106,76 @@ func (c *Conn) writePacketLocked(data []byte) (int, error) {
 
 		m := len(data)
 
-		maxPayloadSize := c.maxPayloadSizeForWrite()
+		packet := c.InitializePacket()
+
+		maxPayloadSize := c.maxPayloadSizeForWrite(packet)
 		if m > int(maxPayloadSize) {
 			m = int(maxPayloadSize)
 		}
 
-		b := c.out.encryptIfNeeded(data[:m])
+		c.AppendTransportMessage(packet, MessageTypeData, data[:m])
+		c.AppendPaddingIfNeeded(packet)
 
-		if _, err := c.conn.Write(b.data); err != nil {
+		b := c.out.encryptIfNeeded(packet)
+
+		if _, err := c.conn.Write(b); err != nil {
 			return n, err
 		}
-		c.out.freeBlock(b)
 		n += m
 		data = data[m:]
 	}
 
 	return n, nil
 }
+func (c *Conn) AppendPaddingIfNeeded(block *block) {
+	if c.out.cs == nil || c.padding == 0 {
+		return
+	}
 
-func (c *Conn) maxPayloadSizeForWrite() uint16 {
-	return MaxPayloadSize - uint16Size - 16
+	payloadSize := -uint16Size + len(block.data) + msgHeaderSize /*zero padding*/ + macSize
+
+	if payloadSize > MaxPayloadSize {
+		panic("no space left for padding")
+	}
+
+	paddingSize := c.padding - uint16(payloadSize)%c.padding
+
+	beforePadding := len(block.data)
+
+	block.resize(beforePadding + msgHeaderSize + int(paddingSize))
+	binary.BigEndian.PutUint16(block.data[beforePadding:], uint16(paddingSize+uint16Size))
+	binary.BigEndian.PutUint16(block.data[beforePadding+2:], MessageTypePadding)
+}
+
+func (c *Conn) maxPayloadSizeForWrite(block *block) uint16 {
+	res := MaxPayloadSize - uint16(len(block.data))
+	if c.out.cs != nil {
+		if c.padding > 0 {
+			return res - macSize - msgHeaderSize*2
+		} else {
+			return res - macSize - msgHeaderSize
+		}
+	}
+	return res
+
+}
+
+func (c *Conn) AppendTransportMessage(block *block, msgType uint16, data []byte) {
+	if c.out.cs != nil {
+		block.reserve(len(block.data) + len(data) + msgHeaderSize)
+		block.data = append(block.data, 0, 0, 0, 0)
+		binary.BigEndian.PutUint16(block.data[len(block.data)-4:], uint16(len(data)+uint16Size))
+		binary.BigEndian.PutUint16(block.data[len(block.data)-2:], msgType)
+		block.data = append(block.data, data...)
+
+		if len(block.data) > math.MaxUint16 {
+			panic("block is too big")
+		}
+	} else {
+		block.resize(len(block.data) + len(data))
+		copy(block.data[uint16Size:len(block.data)], data)
+	}
+
 }
 
 // Read reads data from the connection.
@@ -178,16 +236,64 @@ func (c *Conn) readPacket() error {
 	}
 
 	b, c.rawInput = c.in.splitBlock(b, uint16Size+n)
+	defer c.in.freeBlock(b)
 
-	err := c.in.decryptIfNeeded(b)
+	payload, err := c.in.decryptIfNeeded(b)
 	if err != nil {
 		c.in.setErrorLocked(err)
 		return err
 	}
 
-	c.input = b
-	b = nil
+	in := c.in.newBlock()
+	if c.in.cs != nil {
+		messages, err := c.ParseMessages(payload)
+
+		if err != nil {
+			c.in.setErrorLocked(err)
+			return err
+		}
+
+		msg := messages[0]
+
+		in.resize(len(msg.Data))
+		copy(in.data, msg.Data)
+	} else {
+		in.resize(len(payload))
+		copy(in.data, payload)
+	}
+
+	c.input = in
 	return c.in.err
+}
+
+func (c *Conn) ParseMessages(payload []byte) ([]*TransportMessage, error) {
+
+	if len(payload) < msgHeaderSize {
+		return nil, errors.New("payload too small")
+	}
+
+	msgs := make([]*TransportMessage, 0, 1)
+
+	off := uint16(0)
+	for {
+		msgLen := binary.BigEndian.Uint16(payload[off:])
+		if int(off+msgLen) > len(payload) {
+			return nil, errors.New("invalid size")
+		}
+
+		off += 2
+		msgType := binary.BigEndian.Uint16(payload[off:])
+		off += 2
+		msgs = append(msgs, &TransportMessage{
+			Type: msgType,
+			Data: payload[off : off+msgLen-uint16Size],
+		})
+		off += msgLen - uint16Size
+		if int(off) >= (len(payload) - msgHeaderSize) {
+			break
+		}
+	}
+	return msgs, nil
 }
 
 // Close closes the connection.
