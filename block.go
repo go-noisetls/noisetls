@@ -1,6 +1,10 @@
 package noisetls
 
-import "io"
+import (
+	"encoding/binary"
+	"io"
+	"math"
+)
 
 // A block is a simple data buffer.
 type block struct {
@@ -63,4 +67,34 @@ func (b *block) Read(p []byte) (n int, err error) {
 	n = copy(p, b.data[b.off:])
 	b.off += n
 	return
+}
+
+func (b *block) AddPadding(padding uint16) {
+
+	payloadSize := -uint16Size + len(b.data) + msgHeaderSize /*zero padding*/ + macSize
+
+	if payloadSize > MaxPayloadSize {
+		panic("no space left for padding")
+	}
+
+	paddingSize := padding - uint16(payloadSize)%padding
+
+	beforePadding := len(b.data)
+
+	b.resize(beforePadding + msgHeaderSize + int(paddingSize))
+	binary.BigEndian.PutUint16(b.data[beforePadding:], uint16(paddingSize+uint16Size))
+	binary.BigEndian.PutUint16(b.data[beforePadding+2:], MessageTypePadding)
+}
+
+func (b *block) AppendTransportMessage(data []byte, msgType uint16) {
+
+	b.reserve(len(b.data) + len(data) + msgHeaderSize)
+	b.data = append(b.data, 0, 0, 0, 0)
+	binary.BigEndian.PutUint16(b.data[len(b.data)-4:], uint16(len(data)+uint16Size))
+	binary.BigEndian.PutUint16(b.data[len(b.data)-2:], msgType)
+	b.data = append(b.data, data...)
+
+	if len(b.data) > math.MaxUint16 {
+		panic("block is too big")
+	}
 }

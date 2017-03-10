@@ -113,8 +113,17 @@ func (c *Conn) writePacketLocked(data []byte) (int, error) {
 			m = int(maxPayloadSize)
 		}
 
-		c.AppendTransportMessage(packet, MessageTypeData, data[:m])
-		c.AppendPaddingIfNeeded(packet)
+		if c.out.cs != nil {
+			packet.AppendTransportMessage(data[:m], MessageTypeData)
+		} else {
+			packet.resize(len(packet.data) + len(data))
+			copy(packet.data[uint16Size:len(packet.data)], data[:m])
+			binary.BigEndian.PutUint16(packet.data, uint16(len(data)))
+		}
+
+		if c.out.cs != nil && c.padding == 0 {
+			packet.AddPadding(c.padding)
+		}
 
 		b := c.out.encryptIfNeeded(packet)
 
@@ -127,25 +136,6 @@ func (c *Conn) writePacketLocked(data []byte) (int, error) {
 
 	return n, nil
 }
-func (c *Conn) AppendPaddingIfNeeded(block *block) {
-	if c.out.cs == nil || c.padding == 0 {
-		return
-	}
-
-	payloadSize := -uint16Size + len(block.data) + msgHeaderSize /*zero padding*/ + macSize
-
-	if payloadSize > MaxPayloadSize {
-		panic("no space left for padding")
-	}
-
-	paddingSize := c.padding - uint16(payloadSize)%c.padding
-
-	beforePadding := len(block.data)
-
-	block.resize(beforePadding + msgHeaderSize + int(paddingSize))
-	binary.BigEndian.PutUint16(block.data[beforePadding:], uint16(paddingSize+uint16Size))
-	binary.BigEndian.PutUint16(block.data[beforePadding+2:], MessageTypePadding)
-}
 
 func (c *Conn) maxPayloadSizeForWrite(block *block) uint16 {
 	res := MaxPayloadSize - uint16(len(block.data))
@@ -157,24 +147,6 @@ func (c *Conn) maxPayloadSizeForWrite(block *block) uint16 {
 		}
 	}
 	return res
-
-}
-
-func (c *Conn) AppendTransportMessage(block *block, msgType uint16, data []byte) {
-	if c.out.cs != nil {
-		block.reserve(len(block.data) + len(data) + msgHeaderSize)
-		block.data = append(block.data, 0, 0, 0, 0)
-		binary.BigEndian.PutUint16(block.data[len(block.data)-4:], uint16(len(data)+uint16Size))
-		binary.BigEndian.PutUint16(block.data[len(block.data)-2:], msgType)
-		block.data = append(block.data, data...)
-
-		if len(block.data) > math.MaxUint16 {
-			panic("block is too big")
-		}
-	} else {
-		block.resize(len(block.data) + len(data))
-		copy(block.data[uint16Size:len(block.data)], data)
-	}
 
 }
 
@@ -246,7 +218,7 @@ func (c *Conn) readPacket() error {
 
 	in := c.in.newBlock()
 	if c.in.cs != nil {
-		messages, err := c.ParseMessages(payload)
+		messages, err := ParseMessages(payload)
 
 		if err != nil {
 			c.in.setErrorLocked(err)
@@ -264,36 +236,6 @@ func (c *Conn) readPacket() error {
 
 	c.input = in
 	return c.in.err
-}
-
-func (c *Conn) ParseMessages(payload []byte) ([]*TransportMessage, error) {
-
-	if len(payload) < msgHeaderSize {
-		return nil, errors.New("payload too small")
-	}
-
-	msgs := make([]*TransportMessage, 0, 1)
-
-	off := uint16(0)
-	for {
-		msgLen := binary.BigEndian.Uint16(payload[off:])
-		if int(off+msgLen) > len(payload) {
-			return nil, errors.New("invalid size")
-		}
-
-		off += 2
-		msgType := binary.BigEndian.Uint16(payload[off:])
-		off += 2
-		msgs = append(msgs, &TransportMessage{
-			Type: msgType,
-			Data: payload[off : off+msgLen-uint16Size],
-		})
-		off += msgLen - uint16Size
-		if int(off) >= (len(payload) - msgHeaderSize) {
-			break
-		}
-	}
-	return msgs, nil
 }
 
 // Close closes the connection.
@@ -347,14 +289,24 @@ func (c *Conn) Handshake() error {
 
 func (c *Conn) RunClientHandshake() error {
 
-	msg, states, err := ComposeInitiatorHandshakeMessages(c.myKeys, c.PeerKey, c.payload)
+	var (
+		msg, payload []byte
+		states       []*noise.HandshakeState
+		err          error
+		csIn, csOut  *noise.CipherState
+	)
 
-	if err != nil {
+	b := c.out.newBlock()
+
+	b.AppendTransportMessage(c.payload, MessageTypeCustomCert)
+
+	if msg, states, err = ComposeInitiatorHandshakeMessages(c.myKeys, c.PeerKey, b.data); err != nil {
 		return err
 	}
 
-	_, err = c.writePacket(msg)
-	if err != nil {
+	c.out.freeBlock(b)
+
+	if _, err = c.writePacket(msg); err != nil {
 		return err
 	}
 
@@ -367,8 +319,8 @@ func (c *Conn) RunClientHandshake() error {
 	c.in.freeBlock(c.input)
 	c.input = nil
 
-	if len(msg) < 1 {
-		return errors.New("message length is less than needed")
+	if len(msg) == 0 {
+		return errors.New("0 length messages aren't supported")
 	}
 
 	if int(msg[0]) > (len(states) - 1) {
@@ -377,14 +329,11 @@ func (c *Conn) RunClientHandshake() error {
 
 	hs := states[msg[0]]
 
-	payload, csIn, csOut, err := hs.ReadMessage(msg[:0], msg[1:])
-	if err != nil {
+	if payload, csIn, csOut, err = hs.ReadMessage(msg[:0], msg[1:]); err != nil {
 		return err
 	}
 
-	err = processPayload(payload)
-
-	if err != nil {
+	if err = processPayload(payload); err != nil {
 		return err
 	}
 
@@ -396,11 +345,10 @@ func (c *Conn) RunClientHandshake() error {
 			msg, csIn, csOut = hs.WriteMessage(msg, nil)
 		}
 
-		_, err = c.writePacket(msg)
-
-		if err != nil {
+		if _, err = c.writePacket(msg); err != nil {
 			return err
 		}
+
 		if csIn != nil && csOut != nil {
 			break
 		}
@@ -453,8 +401,14 @@ func (c *Conn) RunServerHandshake() error {
 	msg[0] = index
 
 	//server can safely answer with payload as both XX and IK encrypt it
-	msg, csOut, csIn := hs.WriteMessage(msg, c.payload)
+
+	b := c.out.newBlock()
+
+	b.AppendTransportMessage(c.payload, MessageTypeCustomCert)
+
+	msg, csOut, csIn := hs.WriteMessage(msg, b.data)
 	_, err = c.writePacket(msg)
+	c.out.freeBlock(b)
 
 	if err != nil {
 		return err
@@ -500,8 +454,16 @@ func (c *Conn) RunServerHandshake() error {
 }
 
 func processPayload(payload []byte) error {
-	if len(payload) > 1 {
-		fmt.Println(payload)
+	if len(payload) > 0 {
+		msgs, err := ParseMessages(payload)
+
+		if err != nil {
+			return err
+		}
+
+		for _, m := range msgs {
+			fmt.Println(m.Type)
+		}
 	}
 	return nil
 }

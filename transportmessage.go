@@ -1,10 +1,14 @@
 package noisetls
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"errors"
+)
 
 const (
 	MessageTypePadding uint16 = iota
 	MessageTypeData
+	MessageTypeCustomCert = 1024
 )
 
 type TransportMessage struct {
@@ -12,13 +16,32 @@ type TransportMessage struct {
 	Data []byte
 }
 
-func (t *TransportMessage) Size() int {
-	return uint16Size + uint16Size + len(t.Data) // size + type + data
-}
+func ParseMessages(payload []byte) ([]*TransportMessage, error) {
 
-func (t *TransportMessage) Marshal(out []byte) []byte {
-	out = append(out, 0, 0, 0, 0)
-	binary.BigEndian.PutUint16(out[len(out)-4:], uint16(len(t.Data)+uint16Size))
-	binary.BigEndian.PutUint16(out[len(out)-2:], t.Type)
-	return append(out, t.Data...)
+	if len(payload) < msgHeaderSize {
+		return nil, errors.New("payload too small")
+	}
+
+	msgs := make([]*TransportMessage, 0, 1)
+
+	off := uint16(0)
+	for {
+		msgLen := binary.BigEndian.Uint16(payload[off:])
+		if int(off+msgLen) > len(payload) {
+			return nil, errors.New("invalid size")
+		}
+
+		off += 2
+		msgType := binary.BigEndian.Uint16(payload[off:])
+		off += 2
+		msgs = append(msgs, &TransportMessage{
+			Type: msgType,
+			Data: payload[off : off+msgLen-uint16Size],
+		})
+		off += msgLen - uint16Size
+		if int(off) >= (len(payload) - msgHeaderSize) {
+			break
+		}
+	}
+	return msgs, nil
 }
