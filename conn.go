@@ -126,6 +126,7 @@ func (c *Conn) writePacketLocked(data []byte) (int, error) {
 		}
 
 		b := c.out.encryptIfNeeded(packet)
+		c.out.freeBlock(packet)
 
 		if _, err := c.conn.Write(b); err != nil {
 			return n, err
