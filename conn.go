@@ -114,7 +114,7 @@ func (c *Conn) writePacketLocked(data []byte) (int, error) {
 		}
 
 		if c.out.cs != nil {
-			packet.AppendTransportMessage(data[:m], MessageTypeData)
+			packet.AddField(data[:m], MessageTypeData)
 		} else {
 			packet.resize(len(packet.data) + len(data))
 			copy(packet.data[uint16Size:len(packet.data)], data[:m])
@@ -299,7 +299,7 @@ func (c *Conn) RunClientHandshake() error {
 
 	b := c.out.newBlock()
 
-	b.AppendTransportMessage(c.payload, MessageTypeCustomCert)
+	b.AddField(c.payload, MessageTypeCustomCert)
 
 	if msg, states, err = ComposeInitiatorHandshakeMessages(c.myKeys, c.PeerKey, b.data); err != nil {
 		return err
@@ -320,8 +320,8 @@ func (c *Conn) RunClientHandshake() error {
 	c.in.freeBlock(c.input)
 	c.input = nil
 
-	if len(msg) == 0 {
-		return errors.New("0 length messages aren't supported")
+	if len(msg) < macSize {
+		return errors.New("message is too small")
 	}
 
 	if int(msg[0]) > (len(states) - 1) {
@@ -329,8 +329,13 @@ func (c *Conn) RunClientHandshake() error {
 	}
 
 	hs := states[msg[0]]
+	mType := msg[1]
 
-	if payload, csIn, csOut, err = hs.ReadMessage(msg[:0], msg[1:]); err != nil {
+	if mType != 0 {
+		return errors.New("Only pure IK is supported")
+	}
+
+	if payload, csIn, csOut, err = hs.ReadMessage(msg[:0], msg[2:]); err != nil {
 		return err
 	}
 
@@ -397,15 +402,16 @@ func (c *Conn) RunServerHandshake() error {
 		return err
 	}
 
-	msg = msg[0:1]
+	msg = msg[0:2]
 
 	msg[0] = index
+	msg[1] = 0 // xx_fallback is not supported yet
 
 	//server can safely answer with payload as both XX and IK encrypt it
 
 	b := c.out.newBlock()
 
-	b.AppendTransportMessage(c.payload, MessageTypeCustomCert)
+	b.AddField(c.payload, MessageTypeCustomCert)
 
 	msg, csOut, csIn := hs.WriteMessage(msg, b.data)
 	_, err = c.writePacket(msg)

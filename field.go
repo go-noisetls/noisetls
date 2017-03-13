@@ -11,18 +11,18 @@ const (
 	MessageTypeCustomCert = 1024
 )
 
-type TransportMessage struct {
+type field struct {
 	Type uint16
 	Data []byte
 }
 
-func ParseMessages(payload []byte) ([]*TransportMessage, error) {
+func ParseMessages(payload []byte) ([]*field, error) {
 
 	if len(payload) < msgHeaderSize {
 		return nil, errors.New("payload too small")
 	}
 
-	msgs := make([]*TransportMessage, 0, 1)
+	msgs := make([]*field, 0, 1)
 
 	off := uint16(0)
 	for {
@@ -34,7 +34,7 @@ func ParseMessages(payload []byte) ([]*TransportMessage, error) {
 		off += 2
 		msgType := binary.BigEndian.Uint16(payload[off:])
 		off += 2
-		msgs = append(msgs, &TransportMessage{
+		msgs = append(msgs, &field{
 			Type: msgType,
 			Data: payload[off : off+msgLen-uint16Size],
 		})

@@ -10,7 +10,6 @@ import (
 type block struct {
 	data []byte
 	off  int // index for Read
-	size int
 	link *block
 }
 
@@ -86,7 +85,7 @@ func (b *block) AddPadding(padding uint16) {
 	binary.BigEndian.PutUint16(b.data[beforePadding+2:], MessageTypePadding)
 }
 
-func (b *block) AppendTransportMessage(data []byte, msgType uint16) {
+func (b *block) AddField(data []byte, msgType uint16) {
 
 	b.reserve(len(b.data) + len(data) + msgHeaderSize)
 	b.data = append(b.data, 0, 0, 0, 0)
